@@ -45,10 +45,7 @@ class AccessKey:
     def get_time_since_last_used(self) -> Optional[datetime.timedelta]:
         if self.status == 'Inactive':
             return None
-        if self.last_used:
-            return NOW - self.last_used
-        else:
-            return NOW - self.created
+        return NOW - self.last_used if self.last_used else NOW - self.created
 
     def disable_credential(self):
         iam_client.update_access_key(UserName=self.username, AccessKeyId=self.id, Status='Inactive')
@@ -116,7 +113,7 @@ def check_credential(credential: Union[User, AccessKey], saved_user) -> Dict[str
             if age > t and t.days > last_alert:
                 LOGGER.info(f'Age {age} exceeds alert threshold {t}')
                 return {'result': 'alert', 'threshold': t.days}
-            elif age > t and t.days <= last_alert:
+            elif age > t:
                 LOGGER.info(f'Age {age} exceeds alert threshold {t}, but this was already alerted')
                 return {'result': 'already_alerted', 'threshold': t.days}
 
@@ -151,8 +148,7 @@ def process_credentials(user: User, saved_user):
     elif console_result['result'] == 'already_alerted':
         ret_user['credentials']['console_password'] = {'last_alert': obj['threshold']}
 
-    key_num = 1  # display the key number instead of the actual key
-    for key in user.access_keys:
+    for key_num, key in enumerate(user.access_keys, start=1):
         result = check_credential(key, saved_user)
         obj = {'credential': key, 'id': f'Access key #{key_num}', 'threshold': result['threshold']}
         if result['result'] == 'disable':
@@ -162,8 +158,6 @@ def process_credentials(user: User, saved_user):
             ret_user['credentials'][key.id] = {'last_alert': obj['threshold']}
         elif result['result'] == 'already_alerted':
             ret_user['credentials'][key.id] = {'last_alert': obj['threshold']}
-
-        key_num += 1
 
     if not credentials_to_alert and not credentials_to_disable:
         LOGGER.info(f'No action required for {user.id}')
@@ -228,7 +222,7 @@ You have {len(credentials_to_alert)} {credentials_str} in the AWS account {Prope
     for cred in credentials_to_alert:
         body += f'- {cred["id"]}\n'
 
-    body += f'''
+    body += '''
 Please contact an administrator to re-enable your access.
 '''
 
@@ -342,13 +336,12 @@ def get_required_string(arg_name) -> Tuple[bool, str]:
     """
     if arg_name not in os.environ:
         return False, f'{arg_name} not found; cannot proceed'
-    else:
-        value = os.environ.get(arg_name)
-        if not value:
-            return False, f'{arg_name} specified but has no value'
-        value = value.strip()
-        LOGGER.info(f'{arg_name}: {value}')
-        return True, value
+    value = os.environ.get(arg_name)
+    if not value:
+        return False, f'{arg_name} specified but has no value'
+    value = value.strip()
+    LOGGER.info(f'{arg_name}: {value}')
+    return True, value
 
 
 def get_required_int(arg_name) -> Tuple[bool, Union[int, str]]:
@@ -362,11 +355,10 @@ def get_required_int(arg_name) -> Tuple[bool, Union[int, str]]:
     res = get_required_string(arg_name)
     if not res[0]:
         return res
-    else:
-        try:
-            return True, int(res[1])
-        except:
-            return False, f'Invalid {arg_name}; value must be an integer'
+    try:
+        return True, int(res[1])
+    except:
+        return False, f'Invalid {arg_name}; value must be an integer'
 
 
 def process_user_response(response, user_map):
@@ -420,9 +412,7 @@ def get_state_from_dynamo():
 # entrypoint for lambda
 def handler(event, context):
     try:
-        errors = init()
-
-        if errors:
+        if errors := init():
             LOGGER.error(f'One or more error(s) found during initialization: {"; ".join(errors)}. Exiting.')
             return
 
@@ -462,10 +452,7 @@ def handler(event, context):
 
         lines = [line.split(',') for line in content.split('\n')]
 
-        header = {}
-        for i in range(0, len(lines[0])):
-            header[lines[0][i]] = i
-
+        header = {lines[0][i]: i for i in range(len(lines[0]))}
         for row in lines[1:]:
             username = row[header['user']]
             if username not in user_map:
